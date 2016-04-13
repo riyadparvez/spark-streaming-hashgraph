@@ -15,6 +15,7 @@ mergeStrategy in assembly <<= (mergeStrategy in assembly) { (old) =>
 libraryDependencies += "commons-io" % "commons-io" % "2.4"
 libraryDependencies += "com.google.code.gson" % "gson" % "2.3"
 libraryDependencies += "org.twitter4j" % "twitter4j-core" % "3.0.3"
+//libraryDependencies += "org.twitter4j" % "twitter4j-core" % "4.0.4"
 libraryDependencies += "commons-cli" % "commons-cli" % "1.2"
 
 libraryDependencies += "org.apache.spark" % "spark-streaming_2.10"         % "1.6.1" % "provided"
