@@ -10,6 +10,12 @@ case class Tweet(createdAt: ZonedDateTime, hashtagset: Set[String])
 case class HashGraph(edgesMap: Map[(String, String), ZonedDateTime], degreeMap: Map[String, Int], lowerBoundWindow: ZonedDateTime, upperBoundWindow: ZonedDateTime)
 
 object Main {
+  import org.apache.log4j.Logger
+  import org.apache.log4j.Level
+  
+  Logger.getLogger("org").setLevel(Level.OFF)
+  Logger.getLogger("akka").setLevel(Level.OFF)
+
   private var gson = new Gson()
   def flatMapSublists[A,B](ls: List[A])(f: (List[A]) => List[B]): List[B] = 
     ls match {
@@ -35,22 +41,22 @@ object Main {
         val sortedTags = hashtagset.toList.sorted
         val edges = combinations(sortedTags, 2)
         val edgeTuples = edges.map(l => (l(0), l(1)))
-        val kvs = edgeTuples.map((_ -> createdAt))
+        val kvs = edgeTuples.map(_ -> createdAt)
         val allEdges = edgesMap.keys.toSet
         val newEdges = edgeTuples.filter(!allEdges.contains(_))
         edgesMap = edgesMap ++ kvs
         val inc = newEdges.flatMap(x => List(x._1, x._2)).groupBy(identity).mapValues(_.size)
         // increment degree for each vertices
-        degreeMap = degreeMap ++ inc.map( kv => ( kv._1 -> (degreeMap.getOrElse(kv._1, 0)+kv._2) ) )
+        degreeMap = degreeMap ++ inc.map( kv => kv._1 -> (degreeMap.getOrElse(kv._1, 0)+kv._2) )
       }
       if (createdAt isAfter upperBoundWindow) {
         upperBoundWindow = createdAt
         lowerBoundWindow = upperBoundWindow.minusSeconds(60)
         val (removedEdgesMap, updatedEdgesMap) = edgesMap.partition(p => lowerBoundWindow.compareTo(p._2) > 0)
-        val removedEdges = removedEdgesMap.map(p => p._1).toList
+        val removedEdges = removedEdgesMap.keys.toList
         val dec = removedEdges.flatMap(x => List(x._1, x._2)).groupBy(identity).mapValues(_.size)
         // decrement degress for removed vertices
-        degreeMap = degreeMap ++ dec.map( kv => ( kv._1 -> (degreeMap(kv._1) - kv._2) ) )
+        degreeMap = degreeMap ++ dec.map( kv => kv._1 -> (degreeMap(kv._1) - kv._2) )
         // remove unconnected vertices
         degreeMap = degreeMap.filter(_._2 > 0)
         // remove tweets falls out of window
@@ -58,26 +64,28 @@ object Main {
       }
       val updatedGraph = HashGraph(edgesMap, degreeMap, lowerBoundWindow, upperBoundWindow)
       stateData.update(HashGraph(edgesMap, degreeMap, lowerBoundWindow, upperBoundWindow))
-      if (degreeMap.size == 0) 0.0
-      else degreeMap.values.foldLeft(0)(_ + _).toDouble / degreeMap.size.toDouble
+      if (degreeMap.isEmpty) 0.0
+      else degreeMap.values.sum.toDouble / degreeMap.size.toDouble
     }
     
     Utils.parseCommandLineWithTwitterCredentials(args)
     val jsonParser = new JsonParser()
-      
+
     val conf = new SparkConf().setAppName("streaming-hashgraph")
     val sc = new SparkContext(conf)
     val ssc = new StreamingContext(sc, Seconds(60))
-    ssc.checkpoint("/tmp/hashgraph-streaming");
+    ssc.checkpoint("/tmp/hashgraph-streaming")
 
     val tweetStream = TwitterUtils.createStream(ssc, Utils.getAuth).filter(_.getHashtagEntities().length > 1)
       .map(s => (s.getCreatedAt().toInstant().atZone(ZoneId.systemDefault()), s.getHashtagEntities().map(_.getText).toSet))
     val initialGraph = HashGraph(Map[(String, String), ZonedDateTime](), Map[String, Int](), ZonedDateTime.now().minusYears(30), ZonedDateTime.now().minusYears(30).minusSeconds(60))
     //val initialRDD = ssc.sparkContext.parallelize(List(initialGraph))
     //val updatedAvgDegree = tweetStream.mapWithState(StateSpec.function(mappingFunc).initialState(initialGraph))
-    val initialRDD = ssc.sparkContext.parallelize(List(0.0))
     //val updatedAvgDegree = tweetStream.mapWithState(StateSpec.function(mappingFunc).initialState(initialRDD))
+    val initialRDD = ssc.sparkContext.parallelize(List(0.0))
     val updatedAvgDegree = tweetStream.mapWithState(StateSpec.function(mappingFunc))
+    updatedAvgDegree.print()
+
     ssc.start()
     ssc.awaitTermination()
   }
