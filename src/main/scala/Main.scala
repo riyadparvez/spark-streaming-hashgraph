@@ -1,10 +1,10 @@
 import org.apache.spark._
 import org.apache.spark.streaming._
 import org.apache.spark.streaming.twitter.TwitterUtils
-
-import java.time.{ZonedDateTime, ZoneId}
+import java.time.{ZoneId, ZonedDateTime}
 
 import com.google.gson.{Gson, JsonParser}
+import org.apache.spark.streaming.dstream.DStream
 
 case class Tweet(createdAt: ZonedDateTime, hashtagset: Set[String])
 case class HashGraph(edgesMap: Map[(String, String), ZonedDateTime], degreeMap: Map[String, Int], lowerBoundWindow: ZonedDateTime, upperBoundWindow: ZonedDateTime)
@@ -32,10 +32,13 @@ object Main {
   implicit def dateTimeOrdering: Ordering[ZonedDateTime] = Ordering.fromLessThan(_ isBefore _)
 
   def main(args: Array[String]) {
-    val mappingFunc = (createdAt: ZonedDateTime, hashtags: Option[Set[String]], stateData: State[HashGraph]) => {
+    val mappingFunc = (batchTime: Time, id: Long, value: Option[(ZonedDateTime, Set[String])], stateData: State[HashGraph]) => {
       val currentGraph = stateData.get()
+      val t = value.getOrElse((ZonedDateTime.now().minusYears(30), Set[String]()))
+      val createdAt = t._1
+      val hashtagset = t._2
       var HashGraph(edgesMap, degreeMap, lowerBoundWindow, upperBoundWindow) = currentGraph
-      val hashtagset = hashtags.get
+
       if ((createdAt isAfter lowerBoundWindow) && hashtagset.size > 1) {
         // get edges
         val sortedTags = hashtagset.toList.sorted
@@ -64,8 +67,8 @@ object Main {
       }
       val updatedGraph = HashGraph(edgesMap, degreeMap, lowerBoundWindow, upperBoundWindow)
       stateData.update(HashGraph(edgesMap, degreeMap, lowerBoundWindow, upperBoundWindow))
-      if (degreeMap.isEmpty) 0.0
-      else degreeMap.values.sum.toDouble / degreeMap.size.toDouble
+      if (degreeMap.isEmpty) Option(0.0)
+      else Option(degreeMap.values.sum.toDouble / degreeMap.size.toDouble)
     }
     
     Utils.parseCommandLineWithTwitterCredentials(args)
@@ -76,15 +79,20 @@ object Main {
     val ssc = new StreamingContext(sc, Seconds(60))
     ssc.checkpoint("/tmp/hashgraph-streaming")
 
-    val tweetStream = TwitterUtils.createStream(ssc, Utils.getAuth).filter(_.getHashtagEntities().length > 1)
-      .map(s => (s.getCreatedAt().toInstant().atZone(ZoneId.systemDefault()), s.getHashtagEntities().map(_.getText).toSet))
+    val tweetStream = TwitterUtils.createStream(ssc, Utils.getAuth).filter(_.getHashtagEntities.length > 1)
+      .map(s => (s.getId, (s.getCreatedAt.toInstant.atZone(ZoneId.systemDefault()), s.getHashtagEntities.map(_.getText).toSet)))
     val initialGraph = HashGraph(Map[(String, String), ZonedDateTime](), Map[String, Int](), ZonedDateTime.now().minusYears(30), ZonedDateTime.now().minusYears(30).minusSeconds(60))
     //val initialRDD = ssc.sparkContext.parallelize(List(initialGraph))
     //val updatedAvgDegree = tweetStream.mapWithState(StateSpec.function(mappingFunc).initialState(initialGraph))
     //val updatedAvgDegree = tweetStream.mapWithState(StateSpec.function(mappingFunc).initialState(initialRDD))
-    val initialRDD = ssc.sparkContext.parallelize(List(0.0))
+    //val initialRDD = ssc.sparkContext.parallelize(List(0.0))
     val updatedAvgDegree = tweetStream.mapWithState(StateSpec.function(mappingFunc))
-    updatedAvgDegree.print()
+    updatedAvgDegree.foreachRDD { rdd =>
+      {
+        val data = rdd.collect()
+        println(data)
+      }
+    }
 
     ssc.start()
     ssc.awaitTermination()
