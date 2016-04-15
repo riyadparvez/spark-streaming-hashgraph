@@ -33,7 +33,7 @@ object Main {
 
   def main(args: Array[String]) {
     val mappingFunc = (batchTime: Time, id: Long, value: Option[(ZonedDateTime, Set[String])], stateData: State[HashGraph]) => {
-      val currentGraph = stateData.get()
+      val currentGraph = stateData.getOption.getOrElse(HashGraph(Map[(String, String), ZonedDateTime](), Map[String, Int](), ZonedDateTime.now().minusYears(30), ZonedDateTime.now().minusYears(30).minusSeconds(60)))
       val t = value.getOrElse((ZonedDateTime.now().minusYears(30), Set[String]()))
       val createdAt = t._1
       val hashtagset = t._2
@@ -76,24 +76,26 @@ object Main {
 
     val conf = new SparkConf().setAppName("streaming-hashgraph")
     val sc = new SparkContext(conf)
-    val ssc = new StreamingContext(sc, Seconds(60))
+    val ssc = new StreamingContext(sc, Seconds(1))
     ssc.checkpoint("/tmp/hashgraph-streaming")
 
     val tweetStream = TwitterUtils.createStream(ssc, Utils.getAuth).filter(_.getHashtagEntities.length > 1)
       .map(s => (s.getId, (s.getCreatedAt.toInstant.atZone(ZoneId.systemDefault()), s.getHashtagEntities.map(_.getText).toSet)))
     val initialGraph = HashGraph(Map[(String, String), ZonedDateTime](), Map[String, Int](), ZonedDateTime.now().minusYears(30), ZonedDateTime.now().minusYears(30).minusSeconds(60))
-    //val initialRDD = ssc.sparkContext.parallelize(List(initialGraph))
+    val initialRDD = ssc.sparkContext.parallelize(List((0L, initialGraph)))
     //val updatedAvgDegree = tweetStream.mapWithState(StateSpec.function(mappingFunc).initialState(initialGraph))
     //val updatedAvgDegree = tweetStream.mapWithState(StateSpec.function(mappingFunc).initialState(initialRDD))
     //val initialRDD = ssc.sparkContext.parallelize(List(0.0))
-    val updatedAvgDegree = tweetStream.mapWithState(StateSpec.function(mappingFunc))
+    val updatedAvgDegree = tweetStream.mapWithState(StateSpec.function(mappingFunc).initialState(initialRDD))
+    /**
     updatedAvgDegree.foreachRDD { rdd =>
       {
         val data = rdd.collect()
         println(data)
       }
     }
-
+    */
+    updatedAvgDegree.print()
     ssc.start()
     ssc.awaitTermination()
   }
