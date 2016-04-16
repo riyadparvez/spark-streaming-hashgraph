@@ -1,0 +1,1 @@
+GraphX does not support modification of graph once created, although new graph can be created from existing graph. The `mapWithState` operator does not support creating new `VertexRDD` and `EdgeRDD` because it needs `SparkContext` to be serializable which is not possible without introducing some hack and possibility of weird bugs in future.
